@@ -1,5 +1,6 @@
 package tampilan;
 
+import akun.Sesi;
 import koneksi.KoneksiDB;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -8,6 +9,9 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.event.ActionEvent;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.sql.Connection;
@@ -16,6 +20,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -31,28 +36,35 @@ public class FormBarang extends JFrame {
     private final JButton btnSimpan = new JButton("Simpan Barang");
     private final JButton btnBersihkan = new JButton("Bersihkan Form");
     private final JButton btnMuat = new JButton("Muat Ulang Data");
+    private final JButton btnKeluar = new JButton("Keluar Akun");
     private final JLabel lblStatus = new JLabel("Menyiapkan aplikasi...");
     private final DefaultTableModel model = new DefaultTableModel(
             new Object[]{"Kode", "Nama Barang", "Kategori", "Jumlah", "Keterangan"}, 0) {
+        private static final long serialVersionUID = 1L;
+
         @Override
         public boolean isCellEditable(int row, int column) {
             return false;
         }
+
         @Override
         public Class<?> getColumnClass(int column) {
             return column == 3 ? Integer.class : String.class;
         }
     };
     private final JTable tabel = new JTable(model);
+    private final Sesi sesi;
     private boolean sibuk = false;
 
     private static class Kategori {
         private final int id;
         private final String nama;
+
         Kategori(int id, String nama) {
             this.id = id;
             this.nama = nama;
         }
+
         @Override
         public String toString() {
             return nama;
@@ -64,8 +76,9 @@ public class FormBarang extends JFrame {
         private final List<Object[]> barang = new ArrayList<Object[]>();
     }
 
-    public FormBarang() {
-        super("Inventori Laboratorium | P07 - CREATE dan READ");
+    public FormBarang(Sesi sesi) {
+        super("Inventori Laboratorium | P09 - Login dan Hak Akses");
+        this.sesi = Objects.requireNonNull(sesi, "FormBarang hanya dapat dibuka setelah login.");
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
             @Override
@@ -81,7 +94,7 @@ public class FormBarang extends JFrame {
         susunTampilan();
         pasangAksi();
         pack();
-        setMinimumSize(new Dimension(820, 600));
+        setMinimumSize(new Dimension(860, 620));
         setLocationRelativeTo(null);
         muatData("");
     }
@@ -95,24 +108,39 @@ public class FormBarang extends JFrame {
         JLabel judul = new JLabel("INVENTORI LABORATORIUM");
         judul.setFont(new Font("SansSerif", Font.BOLD, 24));
         judul.setForeground(new Color(24, 49, 83));
-        JLabel subjudul = new JLabel("Tambah barang dan lihat data dari database");
+        JLabel lblPengguna = new JLabel("Masuk sebagai: " + sesi.getNama()
+                + " (" + sesi.getUsername() + ") | Peran: " + sesi.getPeran().toUpperCase());
+        lblPengguna.setFont(new Font("SansSerif", Font.BOLD, 13));
+        JLabel lblHak = new JLabel(sesi.bolehTambahBarang()
+                ? "Hak akses: menambah barang, melihat, dan memuat ulang data."
+                : "Hak akses: hanya melihat dan memuat ulang data (mode baca).");
+        lblHak.setForeground(sesi.bolehTambahBarang()
+                ? new Color(20, 110, 50) : new Color(170, 80, 0));
+        JPanel infoSesi = new JPanel(new BorderLayout(0, 2));
+        infoSesi.setOpaque(false);
+        infoSesi.add(lblPengguna, BorderLayout.NORTH);
+        infoSesi.add(lblHak, BorderLayout.SOUTH);
         JPanel header = new JPanel(new BorderLayout(0, 6));
         header.setOpaque(false);
         header.add(judul, BorderLayout.NORTH);
-        header.add(subjudul, BorderLayout.SOUTH);
+        header.add(infoSesi, BorderLayout.SOUTH);
         utama.add(header, BorderLayout.NORTH);
 
         JPanel form = new JPanel(new GridBagLayout());
-        form.setBorder(BorderFactory.createTitledBorder("Data Barang Baru"));
+        form.setBorder(BorderFactory.createTitledBorder(sesi.bolehTambahBarang()
+                ? "Data Barang Baru" : "Data Barang Baru (khusus admin)"));
         tambahBaris(form, 0, "Kode barang", txtKode);
         tambahBaris(form, 1, "Nama barang", txtNama);
         tambahBaris(form, 2, "Kategori", cmbKategori);
         tambahBaris(form, 3, "Jumlah tersedia", txtJumlah);
         tambahBaris(form, 4, "Keterangan (boleh kosong)", txtKeterangan);
+        btnSimpan.setToolTipText("Simpan barang baru (Ctrl+S). Khusus admin.");
+        btnKeluar.setToolTipText("Tutup sesi ini dan kembali ke jendela login");
         JPanel tombol = new JPanel();
         tombol.add(btnSimpan);
         tombol.add(btnBersihkan);
         tombol.add(btnMuat);
+        tombol.add(btnKeluar);
         GridBagConstraints g = new GridBagConstraints();
         g.gridx = 0;
         g.gridy = 5;
@@ -153,18 +181,37 @@ public class FormBarang extends JFrame {
         btnSimpan.addActionListener(e -> simpanBarang());
         btnBersihkan.addActionListener(e -> bersihkanForm());
         btnMuat.addActionListener(e -> muatData(""));
+        btnKeluar.addActionListener(e -> keluarAkun());
+
+        // Jalur kedua menuju simpanBarang(): tombol pintas Ctrl+S.
+        // Jalur ini tetap aktif walaupun tombol Simpan dinonaktifkan,
+        // sehingga pemeriksaan hak akses di dalam simpanBarang() benar-benar diuji.
+        JRootPane root = getRootPane();
+        root.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK), "simpanBarang");
+        root.getActionMap().put("simpanBarang", new AbstractAction() {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                simpanBarang();
+            }
+        });
+        aturSibuk(false);
     }
 
     private void aturSibuk(boolean nilai) {
         sibuk = nilai;
-        txtKode.setEnabled(!nilai);
-        txtNama.setEnabled(!nilai);
-        txtJumlah.setEnabled(!nilai);
-        txtKeterangan.setEnabled(!nilai);
-        cmbKategori.setEnabled(!nilai);
-        btnSimpan.setEnabled(!nilai && cmbKategori.getItemCount() > 0);
-        btnBersihkan.setEnabled(!nilai);
+        boolean bolehEdit = !nilai && sesi.bolehTambahBarang();
+        txtKode.setEnabled(bolehEdit);
+        txtNama.setEnabled(bolehEdit);
+        txtJumlah.setEnabled(bolehEdit);
+        txtKeterangan.setEnabled(bolehEdit);
+        cmbKategori.setEnabled(bolehEdit);
+        btnSimpan.setEnabled(bolehEdit && cmbKategori.getItemCount() > 0);
+        btnBersihkan.setEnabled(bolehEdit);
         btnMuat.setEnabled(!nilai);
+        btnKeluar.setEnabled(!nilai);
     }
 
     private void bersihkanForm() {
@@ -176,6 +223,15 @@ public class FormBarang extends JFrame {
             cmbKategori.setSelectedIndex(0);
         }
         txtKode.requestFocusInWindow();
+    }
+
+    private void keluarAkun() {
+        if (sibuk) {
+            JOptionPane.showMessageDialog(this, "Tunggu sampai proses database selesai.");
+            return;
+        }
+        dispose();
+        new FormLogin().setVisible(true);
     }
 
     private void muatData(final String pesanSimpan) {
@@ -218,6 +274,7 @@ public class FormBarang extends JFrame {
                 }
                 return data;
             }
+
             @Override
             protected void done() {
                 try {
@@ -263,6 +320,14 @@ public class FormBarang extends JFrame {
     }
 
     private void simpanBarang() {
+        // PEMERIKSAAN HAK AKSES: dijalankan pertama kali, sebelum validasi dan INSERT.
+        if (!sesi.bolehTambahBarang()) {
+            lblStatus.setText("Ditolak: peran " + sesi.getPeran() + " tidak boleh menambah barang.");
+            JOptionPane.showMessageDialog(this,
+                    "Akses ditolak. Hanya admin yang boleh menambah barang.",
+                    "Hak Akses", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
         if (sibuk) {
             return;
         }
@@ -274,9 +339,9 @@ public class FormBarang extends JFrame {
             JOptionPane.showMessageDialog(this, "Kode dan nama barang wajib diisi.");
             return;
         }
-        if (kode.length() > 20 || nama.length() > 150 || ket.length() > 255) {
+        if (kode.length() > 20 || nama.length() > 100 || ket.length() > 255) {
             JOptionPane.showMessageDialog(this,
-                    "Batas karakter: kode 20, nama 150, keterangan 255.");
+                    "Batas karakter: kode 20, nama 100, keterangan 255.");
             return;
         }
         if (kategori == null) {
@@ -312,6 +377,7 @@ public class FormBarang extends JFrame {
                     return ps.executeUpdate();
                 }
             }
+
             @Override
             protected void done() {
                 boolean berhasil = false;
@@ -357,6 +423,8 @@ public class FormBarang extends JFrame {
                 pesan += "\nHak akun belum sesuai. Periksa GRANT SELECT dan INSERT.";
             } else if (e.getErrorCode() == 1452) {
                 pesan += "\nKategori tidak ditemukan. Muat ulang kategori terlebih dahulu.";
+            } else if (e.getErrorCode() == 1406) {
+                pesan += "\nIsian terlalu panjang untuk kolom database.";
             } else {
                 pesan += "\nPeriksa MySQL, konfigurasi koneksi, driver, dan struktur tabel.";
             }
@@ -367,7 +435,8 @@ public class FormBarang extends JFrame {
         JOptionPane.showMessageDialog(this, pesan, "Informasi Database", JOptionPane.ERROR_MESSAGE);
     }
 
+    /** Menjalankan FormBarang langsung akan membuka login terlebih dahulu. */
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> new FormBarang().setVisible(true));
+        FormLogin.main(args);
     }
 }
